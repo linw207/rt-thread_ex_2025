@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "rthw.h": "c",
+        "rtthread.h": "c",
+        "bsp_mem_map.h": "c",
+        "demo_platform_al.h": "c",
+        "stdint.h": "c",
+        "bsp_printf.h": "c",
+        "finsh.h": "c",
+        "rtdef.h": "c"
+    }
+}

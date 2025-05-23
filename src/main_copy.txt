@@ -1,0 +1,232 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2019 Western Digital Corporation or its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http:*www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/**
+ * @file   main.c
+ * @author Nati Rapaport
+ * @date   23.10.2019
+ * @brief  main C file of the demonstration application
+ */
+
+/**
+ * include files
+ */
+#include <rtthread.h>
+#include <rthw.h>
+#include "demo_platform_al.h"
+#include "kalman_filter.h"
+#include "calculator.h"
+
+// 添加新的外部声明
+extern void monitor_sample(void *parameter);
+
+#include <finsh.h>
+//finsh_system_init();
+
+// Declare the kalman_sample function if it is missing
+extern void kalman_sample();
+extern void sm3_sample();
+extern void ex3_sample();
+//extern void calculator_sample(void *parameter);
+#include "board.c"
+
+#define SegEn_ADDR      0x80001038
+#define SegDig_ADDR     0x8000103C
+
+#define GPIO_SWs        0x80001400
+#define GPIO_LEDs       0x80001404
+#define GPIO_INOUT      0x80001408
+#define RGPIO_INTE      0x8000140C
+#define RGPIO_PTRIG     0x80001410
+#define RGPIO_CTRL      0x80001418
+#define RGPIO_INTS      0x8000141C
+
+#define RPTC_CNTR       0x80001200
+#define RPTC_HRC        0x80001204
+#define RPTC_LRC        0x80001208
+#define RPTC_CTRL       0x8000120c
+
+#define Select_INT      0x80001018
+
+#define READ_GPIO(dir) (*(volatile unsigned *)dir)
+#define WRITE_GPIO(dir, value)             \
+  {                                        \
+    (*(volatile unsigned *)dir) = (value); \
+  }
+
+extern void tick_init();
+extern void thread_sample();
+extern void msgq_sample();
+extern void mempool_sample();
+extern void interrupt_sample();
+extern void mutex_sample();
+
+/** led 线程 :Seg显示0x02111212(我的学号末位数字），同时LED灯双数位置和单数位置交替
+*/
+void thread_led_entry()
+{
+    WRITE_GPIO(SegDig_ADDR, 0x02111212);
+    u32_t count = 0;
+    while (1)
+    {
+      if (count % 2 == 0)
+      {
+        WRITE_GPIO(GPIO_LEDs, 0xaaaa);
+      }
+      else
+      {
+        WRITE_GPIO(GPIO_LEDs, 0x5555);
+      }
+      count ++;
+      rt_thread_mdelay(2000);
+    }
+
+}
+
+
+int main_copy(void)
+{
+    // 添加这些测试输出
+    rt_kprintf("\n\n系统启动...\n");
+    rt_kprintf("按键测试程序\n");
+    rt_kprintf("SW1-SW16对应不同功能\n");
+    rt_kprintf("SW3(值为4)启动计算器\n\n");
+    
+    rt_thread_t thread_led, thread_entry = NULL;
+    rt_uint32_t sw_v = 0;
+    int is_calculator_running = 0;  // 添加标志，表示计算器是否在运行
+
+    // 创建并启动LED线程
+    thread_led = rt_thread_create("thread1", thread_led_entry, RT_NULL,
+                              512, 1, 5);
+    rt_thread_startup(thread_led);
+
+    // 无限循环，处理按键
+    while (1)
+    {
+        // 获取当前按键值
+        rt_uint32_t current_sw = READ_GPIO(GPIO_SWs) >> 16;
+        
+        // 如果计算器正在运行，让计算器线程处理按键，不做其他操作
+        if (is_calculator_running && thread_entry != NULL) 
+        {
+            // 检查计算器线程是否已结束
+            if (thread_entry->stat == RT_THREAD_CLOSE)
+            {
+                is_calculator_running = 0;
+                thread_entry = NULL;
+            }
+            else
+            {
+                // 让出CPU，让计算器线程有机会处理按键
+                rt_thread_mdelay(200);
+                continue;
+            }
+        }
+
+        // 按键值没变化，延时后继续循环
+        if (sw_v == current_sw)
+        {
+            rt_thread_mdelay(200);
+            continue;
+        }
+
+        // 更新按键值
+        sw_v = current_sw;
+
+        // 处理按键操作
+        if (sw_v == 0)
+        {
+            if (thread_entry != NULL) 
+            {
+                // 如果之前存在线程，则挂起并删除
+                rt_thread_suspend(thread_entry);
+                rt_thread_delete(thread_entry);
+                thread_entry = NULL;
+                is_calculator_running = 0;  // 重置计算器标志
+            }
+        }
+      else if (sw_v == 1)
+      {
+        // 创建并启动名为"thread_m"的线程，使用msgq_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_k", kalman_sample, RT_NULL,
+                                  512,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      else if (sw_v == 2)
+      {
+        // 创建并启动名为"thread_t"的线程，使用thread_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_sm3", sm3_sample, RT_NULL,
+                                  1024,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      else if (sw_v == 4)
+      {
+        // 创建并启动计算器线程
+        thread_entry = rt_thread_create("thread_calc", calculator_sample, RT_NULL,
+                                  1024,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+        
+        // 同时启动监控线程（可选，如果不需要可以注释掉）
+        rt_thread_t thread_monitor = rt_thread_create("thread_mon", monitor_sample, RT_NULL,
+                                  512,
+                                  10, 5);
+        rt_thread_startup(thread_monitor);
+    }
+      else if (sw_v == 64)
+      {
+        // 创建并启动名为"thread_t"的线程，使用thread_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_t", thread_sample, RT_NULL,
+                                  512,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      else if (sw_v == 128)
+      {
+        // 创建并启动名为"thread_m"的线程，使用mempool_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_m", mempool_sample, RT_NULL,
+                                  512,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      else if (sw_v == 8)
+      {
+        // 创建并启动名为"thread_i"的线程，使用interrupt_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_i", interrupt_sample, RT_NULL,
+                                  512,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      else if (sw_v == 16)
+      {
+        // 创建并启动名为"thread_mt"的线程，使用mutex_sample函数作为线程入口
+        thread_entry = rt_thread_create("thread_mt", mutex_sample, RT_NULL,
+                                  512,
+                                  9, 5);
+        rt_thread_startup(thread_entry);
+      }
+      rt_thread_mdelay(200);
+    }
+
+    for (;;)
+    {
+        rt_thread_delay(50);
+    }
+    return 0;
+}
