@@ -142,39 +142,57 @@ rt_inline void rt_mem_setname(struct heap_mem *mem, const char *name)
 
 static void plug_holes(struct heap_mem *mem)
 {
-    struct heap_mem *nmem;
-    struct heap_mem *pmem;
+    // struct heap_mem *nmem;
+    // struct heap_mem *pmem;
+    // 合并相邻空闲内存块时使用直接指针操作代替多次索引
+    struct heap_mem *nmem = (struct heap_mem *)&heap_ptr[mem->next];
+    struct heap_mem *pmem = (struct heap_mem *)&heap_ptr[mem->prev];
+    
 
     RT_ASSERT((rt_uint8_t *)mem >= heap_ptr);
     RT_ASSERT((rt_uint8_t *)mem < (rt_uint8_t *)heap_end);
     RT_ASSERT(mem->used == 0);
 
     /* plug hole forward */
-    nmem = (struct heap_mem *)&heap_ptr[mem->next];
-    if (mem != nmem &&
-        nmem->used == 0 &&
-        (rt_uint8_t *)nmem != (rt_uint8_t *)heap_end)
-    {
-        /* if mem->next is unused and not end of heap_ptr,
-         * combine mem and mem->next
-         */
-        if (lfree == nmem)
-        {
-            lfree = mem;
-        }
+    // nmem = (struct heap_mem *)&heap_ptr[mem->next];
+    // if (mem != nmem &&
+    //     nmem->used == 0 &&
+    //     (rt_uint8_t *)nmem != (rt_uint8_t *)heap_end)
+    // {
+    //     /* if mem->next is unused and not end of heap_ptr,
+    //      * combine mem and mem->next
+    //      */
+    //     if (lfree == nmem)
+    //     {
+    //         lfree = mem;
+    //     }
+    //     mem->next = nmem->next;
+    //     ((struct heap_mem *)&heap_ptr[nmem->next])->prev = (rt_uint8_t *)mem - heap_ptr;
+    // }
+
+    // /* plug hole backward */
+    // pmem = (struct heap_mem *)&heap_ptr[mem->prev];
+    // if (pmem != mem && pmem->used == 0)
+    // {
+    //     /* if mem->prev is unused, combine mem and mem->prev */
+    //     if (lfree == mem)
+    //     {
+    //         lfree = pmem;
+    //     }
+    //     pmem->next = mem->next;
+    //     ((struct heap_mem *)&heap_ptr[mem->next])->prev = (rt_uint8_t *)pmem - heap_ptr;
+    // }
+    // 使用一次性判断减少条件检查次数
+    if (mem != nmem && nmem->used == 0) {
+        // 合并后块处理
+        if (lfree == nmem) lfree = mem;
         mem->next = nmem->next;
         ((struct heap_mem *)&heap_ptr[nmem->next])->prev = (rt_uint8_t *)mem - heap_ptr;
     }
-
-    /* plug hole backward */
-    pmem = (struct heap_mem *)&heap_ptr[mem->prev];
-    if (pmem != mem && pmem->used == 0)
-    {
-        /* if mem->prev is unused, combine mem and mem->prev */
-        if (lfree == mem)
-        {
-            lfree = pmem;
-        }
+    
+    // 前向合并简化
+    if (pmem != mem && pmem->used == 0) {
+        if (lfree == mem) lfree = pmem;
         pmem->next = mem->next;
         ((struct heap_mem *)&heap_ptr[mem->next])->prev = (rt_uint8_t *)pmem - heap_ptr;
     }

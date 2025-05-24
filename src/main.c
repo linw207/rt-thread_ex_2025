@@ -109,7 +109,7 @@ int main(void)
                     calculator_running = 1;
                     rt_kprintf("计算器已启动！\n");
                     rt_kprintf("使用说明:\n");
-                    rt_kprintf("SW1: 设置数字(0-9循环)\n");
+                    rt_kprintf("SW1: 设置数字\n");
                     rt_kprintf("SW2: 确认数字/操作\n");
                     rt_kprintf("SW3: 清除/重置\n");
                 }

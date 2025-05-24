@@ -475,6 +475,208 @@ rt_inline int zoneindex(rt_size_t *bytes)
  *
  * @return the allocated memory
  */
+// void *rt_malloc(rt_size_t size)
+// {
+//     slab_zone *z;
+//     rt_int32_t zi;
+//     slab_chunk *chunk;
+//     struct memusage *kup;
+
+//     /* zero size, return RT_NULL */
+//     if (size == 0)
+//         return RT_NULL;
+
+//     /*
+//      * Handle large allocations directly.  There should not be very many of
+//      * these so performance is not a big issue.
+//      */
+//     if (size >= zone_limit)
+//     {
+//         size = RT_ALIGN(size, RT_MM_PAGE_SIZE);
+
+//         chunk = rt_page_alloc(size >> RT_MM_PAGE_BITS);
+//         if (chunk == RT_NULL)
+//             return RT_NULL;
+
+//         /* set kup */
+//         kup = btokup(chunk);
+//         kup->type = PAGE_TYPE_LARGE;
+//         kup->size = size >> RT_MM_PAGE_BITS;
+
+//         RT_DEBUG_LOG(RT_DEBUG_SLAB,
+//                      ("malloc a large memory 0x%x, page cnt %d, kup %d\n",
+//                       size,
+//                       size >> RT_MM_PAGE_BITS,
+//                       ((rt_uint32_t)chunk - heap_start) >> RT_MM_PAGE_BITS));
+
+//         /* lock heap */
+//         rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
+
+// #ifdef RT_MEM_STATS
+//         used_mem += size;
+//         if (used_mem > max_mem)
+//             max_mem = used_mem;
+// #endif
+//         goto done;
+//     }
+
+//     /* lock heap */
+//     rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
+
+//     /*
+//      * Attempt to allocate out of an existing zone.  First try the free list,
+//      * then allocate out of unallocated space.  If we find a good zone move
+//      * it to the head of the list so later allocations find it quickly
+//      * (we might have thousands of zones in the list).
+//      *
+//      * Note: zoneindex() will panic of size is too large.
+//      */
+//     zi = zoneindex(&size);
+//     RT_ASSERT(zi < NZONES);
+
+//     RT_DEBUG_LOG(RT_DEBUG_SLAB, ("try to malloc 0x%x on zone: %d\n", size, zi));
+
+//     if ((z = zone_array[zi]) != RT_NULL)
+//     {
+//         RT_ASSERT(z->z_nfree > 0);
+
+//         /* Remove us from the zone_array[] when we become empty */
+//         if (--z->z_nfree == 0)
+//         {
+//             zone_array[zi] = z->z_next;
+//             z->z_next = RT_NULL;
+//         }
+
+//         /*
+//          * No chunks are available but nfree said we had some memory, so
+//          * it must be available in the never-before-used-memory area
+//          * governed by uindex.  The consequences are very serious if our zone
+//          * got corrupted so we use an explicit rt_kprintf rather then a KASSERT.
+//          */
+//         if (z->z_uindex + 1 != z->z_nmax)
+//         {
+//             z->z_uindex = z->z_uindex + 1;
+//             chunk = (slab_chunk *)(z->z_baseptr + z->z_uindex * size);
+//         }
+//         else
+//         {
+//             /* find on free chunk list */
+//             chunk = z->z_freechunk;
+
+//             /* remove this chunk from list */
+//             z->z_freechunk = z->z_freechunk->c_next;
+//         }
+
+// #ifdef RT_MEM_STATS
+//         used_mem += z->z_chunksize;
+//         if (used_mem > max_mem)
+//             max_mem = used_mem;
+// #endif
+
+//         goto done;
+//     }
+
+//     /*
+//      * If all zones are exhausted we need to allocate a new zone for this
+//      * index.
+//      *
+//      * At least one subsystem, the tty code (see CROUND) expects power-of-2
+//      * allocations to be power-of-2 aligned.  We maintain compatibility by
+//      * adjusting the base offset below.
+//      */
+//     {
+//         rt_int32_t off;
+
+//         if ((z = zone_free) != RT_NULL)
+//         {
+//             /* remove zone from free zone list */
+//             zone_free = z->z_next;
+//             -- zone_free_cnt;
+//         }
+//         else
+//         {
+//             /* unlock heap, since page allocator will think about lock */
+//             rt_sem_release(&heap_sem);
+
+//             /* allocate a zone from page */
+//             z = rt_page_alloc(zone_size / RT_MM_PAGE_SIZE);
+//             if (z == RT_NULL)
+//             {
+//                 chunk = RT_NULL;
+//                 goto __exit;
+//             }
+
+//             /* lock heap */
+//             rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
+
+//             RT_DEBUG_LOG(RT_DEBUG_SLAB, ("alloc a new zone: 0x%x\n",
+//                                          (rt_uint32_t)z));
+
+//             /* set message usage */
+//             for (off = 0, kup = btokup(z); off < zone_page_cnt; off ++)
+//             {
+//                 kup->type = PAGE_TYPE_SMALL;
+//                 kup->size = off;
+
+//                 kup ++;
+//             }
+//         }
+
+//         /* clear to zero */
+//         rt_memset(z, 0, sizeof(slab_zone));
+
+//         /* offset of slab zone struct in zone */
+//         off = sizeof(slab_zone);
+
+//         /*
+//          * Guarentee power-of-2 alignment for power-of-2-sized chunks.
+//          * Otherwise just 8-byte align the data.
+//          */
+//         if ((size | (size - 1)) + 1 == (size << 1))
+//             off = (off + size - 1) & ~(size - 1);
+//         else
+//             off = (off + MIN_CHUNK_MASK) & ~MIN_CHUNK_MASK;
+
+//         z->z_magic     = ZALLOC_SLAB_MAGIC;
+//         z->z_zoneindex = zi;
+//         z->z_nmax      = (zone_size - off) / size;
+//         z->z_nfree     = z->z_nmax - 1;
+//         z->z_baseptr   = (rt_uint8_t *)z + off;
+//         z->z_uindex    = 0;
+//         z->z_chunksize = size;
+
+//         chunk = (slab_chunk *)(z->z_baseptr + z->z_uindex * size);
+
+//         /* link to zone array */
+//         z->z_next = zone_array[zi];
+//         zone_array[zi] = z;
+
+// #ifdef RT_MEM_STATS
+//         used_mem += z->z_chunksize;
+//         if (used_mem > max_mem)
+//             max_mem = used_mem;
+// #endif
+//     }
+
+// done:
+//     rt_sem_release(&heap_sem);
+//     RT_OBJECT_HOOK_CALL(rt_malloc_hook, ((char *)chunk, size));
+
+// __exit:
+//     return chunk;
+// }
+
+//简化版内存池缓存
+#define SMALL_CACHE_SIZE 4
+#define SMALL_CACHE_THRESHOLD 128 // 小于这个尺寸的内存块使用缓存
+
+// 定义小内存块缓存
+static struct {
+    void* cache[SMALL_CACHE_SIZE];
+    rt_size_t sizes[SMALL_CACHE_SIZE];
+    rt_uint8_t used;
+} small_cache = {0};
+
 void *rt_malloc(rt_size_t size)
 {
     slab_zone *z;
@@ -482,23 +684,55 @@ void *rt_malloc(rt_size_t size)
     slab_chunk *chunk;
     struct memusage *kup;
 
-    /* zero size, return RT_NULL */
+    /* 1. 处理特殊情况：零尺寸 */
     if (size == 0)
         return RT_NULL;
+        
+    /* 2. 小内存优化：检查缓存 */
+    if (size <= SMALL_CACHE_THRESHOLD) 
+    {
+        rt_base_t level;
+        /* 临界区保护 */
+        level = rt_hw_interrupt_disable();
+        
+        /* 检查缓存中是否有合适尺寸的块 */
+        for (int i = 0; i < small_cache.used; i++) 
+        {
+            if (small_cache.sizes[i] >= size) 
+            {
+                void* ptr = small_cache.cache[i];
+                
+                /* 将后面的缓存条目前移 */
+                if (i < small_cache.used - 1) {
+                    rt_memmove(&small_cache.cache[i], &small_cache.cache[i+1], 
+                           (small_cache.used - i - 1) * sizeof(void*));
+                    rt_memmove(&small_cache.sizes[i], &small_cache.sizes[i+1], 
+                           (small_cache.used - i - 1) * sizeof(rt_size_t));
+                }
+                
+                small_cache.used--;
+                rt_hw_interrupt_enable(level);
+                return ptr;
+            }
+        }
+        rt_hw_interrupt_enable(level);
+    }
 
-    /*
-     * Handle large allocations directly.  There should not be very many of
-     * these so performance is not a big issue.
-     */
+    /* 3. 大内存分配 */
     if (size >= zone_limit)
     {
         size = RT_ALIGN(size, RT_MM_PAGE_SIZE);
+
+        /* 快速失败：过大内存请求预检查 */
+        if (size > (heap_end - heap_start) / 2) {
+            return RT_NULL;  // 请求超过堆空间的一半，直接拒绝
+        }
 
         chunk = rt_page_alloc(size >> RT_MM_PAGE_BITS);
         if (chunk == RT_NULL)
             return RT_NULL;
 
-        /* set kup */
+        /* 设置内存使用信息 */
         kup = btokup(chunk);
         kup->type = PAGE_TYPE_LARGE;
         kup->size = size >> RT_MM_PAGE_BITS;
@@ -509,7 +743,7 @@ void *rt_malloc(rt_size_t size)
                       size >> RT_MM_PAGE_BITS,
                       ((rt_uint32_t)chunk - heap_start) >> RT_MM_PAGE_BITS));
 
-        /* lock heap */
+        /* 锁定堆，仅用于更新统计信息 */
         rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
 
 #ifdef RT_MEM_STATS
@@ -517,54 +751,56 @@ void *rt_malloc(rt_size_t size)
         if (used_mem > max_mem)
             max_mem = used_mem;
 #endif
-        goto done;
+        rt_sem_release(&heap_sem);
+        RT_OBJECT_HOOK_CALL(rt_malloc_hook, ((char *)chunk, size));
+        return chunk;
     }
 
-    /* lock heap */
+    /* 4. 常见尺寸优化 */
+    /* 对常见尺寸使用快速路径 */
+    switch (size) {
+        case 8:  zi = 0; size = 8; break;   // 8字节
+        case 16: zi = 1; size = 16; break;  // 16字节
+        case 32: zi = 2; size = 32; break;  // 32字节
+        case 64: zi = 3; size = 64; break;  // 64字节
+        case 128: zi = 4; size = 128; break; // 128字节
+        default:
+            /* 其他尺寸使用标准计算方法 */
+            zi = zoneindex(&size);
+    }
+    
+    /* 锁定堆进行分配 */
     rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
 
-    /*
-     * Attempt to allocate out of an existing zone.  First try the free list,
-     * then allocate out of unallocated space.  If we find a good zone move
-     * it to the head of the list so later allocations find it quickly
-     * (we might have thousands of zones in the list).
-     *
-     * Note: zoneindex() will panic of size is too large.
-     */
-    zi = zoneindex(&size);
-    RT_ASSERT(zi < NZONES);
-
-    RT_DEBUG_LOG(RT_DEBUG_SLAB, ("try to malloc 0x%x on zone: %d\n", size, zi));
-
+    /* 5. 从现有区间分配 */
     if ((z = zone_array[zi]) != RT_NULL)
     {
         RT_ASSERT(z->z_nfree > 0);
 
-        /* Remove us from the zone_array[] when we become empty */
+        /* 当区域变空时从区域数组中移除 */
         if (--z->z_nfree == 0)
         {
             zone_array[zi] = z->z_next;
             z->z_next = RT_NULL;
         }
 
-        /*
-         * No chunks are available but nfree said we had some memory, so
-         * it must be available in the never-before-used-memory area
-         * governed by uindex.  The consequences are very serious if our zone
-         * got corrupted so we use an explicit rt_kprintf rather then a KASSERT.
-         */
-        if (z->z_uindex + 1 != z->z_nmax)
+        /* 优先从空闲块列表分配（提高缓存局部性） */
+        if (z->z_freechunk != RT_NULL)
+        {
+            chunk = z->z_freechunk;
+            z->z_freechunk = chunk->c_next;
+        }
+        /* 其次从未使用区域分配新块 */
+        else if (z->z_uindex + 1 != z->z_nmax)
         {
             z->z_uindex = z->z_uindex + 1;
             chunk = (slab_chunk *)(z->z_baseptr + z->z_uindex * size);
         }
         else
         {
-            /* find on free chunk list */
-            chunk = z->z_freechunk;
-
-            /* remove this chunk from list */
-            z->z_freechunk = z->z_freechunk->c_next;
+            /* 不应该发生的情况 */
+            RT_ASSERT(0);
+            chunk = RT_NULL;
         }
 
 #ifdef RT_MEM_STATS
@@ -573,64 +809,57 @@ void *rt_malloc(rt_size_t size)
             max_mem = used_mem;
 #endif
 
-        goto done;
+        rt_sem_release(&heap_sem);
+        RT_OBJECT_HOOK_CALL(rt_malloc_hook, ((char *)chunk, size));
+        return chunk;
     }
 
-    /*
-     * If all zones are exhausted we need to allocate a new zone for this
-     * index.
-     *
-     * At least one subsystem, the tty code (see CROUND) expects power-of-2
-     * allocations to be power-of-2 aligned.  We maintain compatibility by
-     * adjusting the base offset below.
-     */
+    /* 6. 分配新区间 */
     {
         rt_int32_t off;
 
         if ((z = zone_free) != RT_NULL)
         {
-            /* remove zone from free zone list */
+            /* 从空闲区间列表中移除 */
             zone_free = z->z_next;
             -- zone_free_cnt;
         }
         else
         {
-            /* unlock heap, since page allocator will think about lock */
+            /* 解锁堆，因为页面分配器会考虑锁定 */
             rt_sem_release(&heap_sem);
 
-            /* allocate a zone from page */
+            /* 从页面分配器获取新区间 */
             z = rt_page_alloc(zone_size / RT_MM_PAGE_SIZE);
             if (z == RT_NULL)
             {
-                chunk = RT_NULL;
-                goto __exit;
+                return RT_NULL;
             }
 
-            /* lock heap */
+            /* 重新锁定堆 */
             rt_sem_take(&heap_sem, RT_WAITING_FOREVER);
 
             RT_DEBUG_LOG(RT_DEBUG_SLAB, ("alloc a new zone: 0x%x\n",
                                          (rt_uint32_t)z));
 
-            /* set message usage */
+            /* 设置内存使用信息 */
             for (off = 0, kup = btokup(z); off < zone_page_cnt; off ++)
             {
                 kup->type = PAGE_TYPE_SMALL;
                 kup->size = off;
-
                 kup ++;
             }
         }
 
-        /* clear to zero */
+        /* 只清零必要的部分，而不是整个区间 */
         rt_memset(z, 0, sizeof(slab_zone));
 
-        /* offset of slab zone struct in zone */
+        /* 区间中slab zone结构的偏移量 */
         off = sizeof(slab_zone);
 
-        /*
-         * Guarentee power-of-2 alignment for power-of-2-sized chunks.
-         * Otherwise just 8-byte align the data.
+        /* 
+         * 为2的幂大小的块保证对齐，
+         * 否则只需要8字节对齐数据
          */
         if ((size | (size - 1)) + 1 == (size << 1))
             off = (off + size - 1) & ~(size - 1);
@@ -647,7 +876,7 @@ void *rt_malloc(rt_size_t size)
 
         chunk = (slab_chunk *)(z->z_baseptr + z->z_uindex * size);
 
-        /* link to zone array */
+        /* 链接到区间数组，放在开头提高局部性 */
         z->z_next = zone_array[zi];
         zone_array[zi] = z;
 
@@ -658,15 +887,12 @@ void *rt_malloc(rt_size_t size)
 #endif
     }
 
-done:
     rt_sem_release(&heap_sem);
     RT_OBJECT_HOOK_CALL(rt_malloc_hook, ((char *)chunk, size));
-
-__exit:
     return chunk;
 }
-RTM_EXPORT(rt_malloc);
 
+RTM_EXPORT(rt_malloc);
 /**
  * This function will change the size of previously allocated memory block.
  *
